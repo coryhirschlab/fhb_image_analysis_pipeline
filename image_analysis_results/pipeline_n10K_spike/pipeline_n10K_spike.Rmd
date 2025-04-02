@@ -1,0 +1,120 @@
+---
+title: "2021 FHB Pipeline Automatic Image Annotation vs. Manual Image Annotation - Large Scale Annotation; Spike"
+author: "Julian Cooper"
+date: "2023-10-03"
+output: html_document
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(warning = FALSE, message = FALSE) 
+```
+
+# Overview
+
+Compare manual image annotation (MIA) - large scale annotation (LSA)
+disease results on a single spike basis to automatic image annotation
+(AIA) pipeline inferences on the same spikes
+
+# Load Libraries
+
+```{r,print = FALSE}
+
+library(ggplot2) # For plotting data
+library(tidyverse) # For manipulating/analyzing data
+library(stringr) # For regex
+library(GGally) # For ggcor
+library(irr) # For calculating ICC
+library(ggridges)    # for making ridge plot
+library(viridis)     # color scaling in plot
+library(rmarkdown) # For formatting rmarkdown
+library(reshape2) # For reshaping correlation matrix
+
+```
+
+# Compare Model Spike Disease Prediction to LSA Spike Disease Annotation
+Not filtering for gradability
+
+```{r}
+
+# Load pipeline inferences on LSA images
+aia_LSA <- read.csv("/Users/jcooper/Desktop/thesis_research/fhb_mineral/FHB_phenotyping_pipeline/automatic_image_annotation/2021model/raw_data/results_summary_v1-model_2021_vertical_annotated_subset_gradable_registered.csv")
+
+# Trim and format DF
+aia <- aia_LSA[, -c(1:11, 15:19)] # Keep gradability, FHB percent, box coordinates, and location
+colnames(aia)[2] <- "AIA_FHB"
+
+# Load Large Scale Annotation DF
+lsa <- read.csv("/Users/jcooper/Desktop/thesis_research/fhb_mineral/FHB_phenotyping_pipeline/manual_image_annotation/large_scale_annotations/data/2022/wheat2022_mia_large_scale_annotations.csv")
+
+# Trim and format DF
+lsa <- lsa %>%
+  select(c(1, 5, 6, 10, 13)) # keep location, box coordinates, FHB percent, Rater, ID
+colnames(lsa)[3] <- "LSA_FHB"
+
+# Format box_coord to mathc between aia and lsa df
+aia$box_coords <- gsub("\\'", "", as.character(aia$box_coords)) # Remove ".0, " from first three numbers
+aia$box_coords <- gsub("\\, ", "", as.character(aia$box_coords)) # Remove trailing ".0" from last number
+lsa$box_coords <- gsub("\\s+", "", as.character(lsa$box_coords)) # Remove extra spaces
+
+# Merge DF
+aia_lsa_intersect <- merge(aia, lsa, by = c("box_coords"))
+
+# Average spike disease in AIA and LSA
+aia_lsa_intersect %>%
+  summarise(mean(AIA_FHB), mean(LSA_FHB))
+
+# Average spike disease in AIA and LSA in each location
+aia_lsa_intersect %>%
+  group_by(Location) %>%
+  summarise(mean(AIA_FHB), mean(LSA_FHB))
+
+# Plot AIA vs LSA spike disease, color by location
+aia_lsa_intersect_scatterplot <- aia_lsa_intersect %>% 
+  ggplot(aes(x = LSA_FHB, y = AIA_FHB, color = Location)) +
+  geom_point(size = .5) +
+  geom_smooth(method = "lm", se = FALSE, color = "blue") + # Add linear regression line 
+  geom_abline() + 
+  theme_classic()
+print(aia_lsa_intersect_scatterplot)
+ggsave("/Users/jcooper/Desktop/thesis_research/fhb_mineral/FHB_phenotyping_pipeline/automatic_image_annotation/2021model/aia_mia_lsa_spike/results/aia_lsa_spike_scatterplot.png",
+plot = aia_lsa_intersect_scatterplot, width = 6, height = 4)
+
+# Plot AIA vs LSA spike disease, color by location, facet by rater
+aia_lsa_intersect_scatterplot_rater <- aia_lsa_intersect %>% 
+  ggplot(aes(x = LSA_FHB, y = AIA_FHB, color = Location)) +
+  geom_point(size = .5) +
+  geom_smooth(method = "lm", se = FALSE, color = "blue") + # Add linear regression line 
+  geom_abline() + 
+  theme_classic() +
+  facet_grid(~ Rater_ID)
+
+print(aia_lsa_intersect_scatterplot_rater)
+ggsave("/Users/jcooper/Desktop/thesis_research/fhb_mineral/FHB_phenotyping_pipeline/automatic_image_annotation/2021model/aia_mia_lsa_spike/results/aia_lsa_spike_scatterplot_rater.png",
+plot = aia_lsa_intersect_scatterplot_rater, width = 6, height = 4)
+
+# Correlation between AIA and LSA spike disease
+aia_lsa_intersect %>% 
+  na.omit() %>% 
+  summarise(cor(AIA_FHB, LSA_FHB))
+
+# Correlation between AIA and LSA spike disease for each rater
+aia_lsa_intersect %>% 
+  group_by(Rater_ID) %>% 
+  na.omit() %>%
+  summarise(cor(AIA_FHB, LSA_FHB))
+
+# Correlation between AIA and LSA spike disease for each location
+aia_lsa_intersect %>% 
+  group_by(Location) %>% 
+  na.omit() %>%
+  summarise(cor(AIA_FHB, LSA_FHB))
+
+# Correlation between AIA and LSA spike disease for each rater in each location
+aia_lsa_intersect %>% 
+  group_by(Location, Rater_ID) %>% 
+  na.omit() %>%
+  summarise(cor(AIA_FHB, LSA_FHB))
+```

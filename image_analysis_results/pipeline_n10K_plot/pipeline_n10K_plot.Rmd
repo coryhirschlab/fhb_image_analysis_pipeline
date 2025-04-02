@@ -1,0 +1,80 @@
+---
+title: "2021 FHB Pipeline Automatic Image Annotation vs. Manual Image Annotation - Large Scale Annotation; Plot"
+author: "Julian Cooper"
+date: "2023-09-27"
+output: html_document
+---
+
+```{r setup, include=FALSE} 
+knitr::opts_chunk$set(warning = FALSE, message = FALSE) 
+```
+
+# Overview
+Correlations between pipeline automatic image annotation (AIA) plot average and manual image annotation (MIA) plot averages from the large scale annotation (LSA) data set
+
+# Load Libraries
+```{r,print = FALSE}
+
+library(ggplot2) # For plotting data
+library(tidyverse) # For manipulating/analyzing data
+library(stringr) # For regex
+library(GGally) # For ggcor
+library(irr) # For calculating ICC
+library(ggridges)    # for making ridge plot
+library(viridis)     # color scaling in plot
+library(rmarkdown) # For formatting rmarkdown
+library(reshape2) # For reshaping correlation matrix
+
+```
+
+# Compare AIA Plot Averages to MIA LSA Plot Averages Based on ALL 5 RATERS
+Filter for gradable spike images <= 0.50
+```{r}
+
+# Load AIA (automatic image annotation) data
+aia <- read.csv("/Users/jcooper/Desktop/thesis_research/fhb_mineral/FHB_phenotyping_pipeline/automatic_image_annotation/2021model/data_processing/data/wheat2021model_automatic_image_annotation.csv")
+
+# Calculate plot average FHB based on gradable spikes
+aia_plot_avg <- aia %>% 
+  filter(gradability_prob <= 0.50) %>%
+  group_by(ID) %>% # group by ID for plot average
+  summarise(aia_avg_fhb = mean(fhb_percentage, na.rm = TRUE)) %>% # Get plot average
+  ungroup()
+
+# Load MIA LSA (manual image large scale annotation) data
+lsa <- read.csv("/Users/jcooper/Desktop/thesis_research/fhb_mineral/FHB_phenotyping_pipeline/manual_image_annotation/large_scale_annotations/data/2022/wheat2022_mia_large_scale_annotations.csv")
+
+# Average plot average FHB based on graded spikes from all 5 rater
+lsa_plot_avg <- lsa %>%
+  group_by(ID) %>% # group by ID
+  summarise(lsa_avg_fhb = mean(fhb_perc, na.rm = TRUE)) %>% # Get plot average
+  ungroup() %>%
+  separate(ID, into = c('Location', 'row_plot', 'PlotID', "Rating_Date"), sep = "_", remove = FALSE) # separate ID back into location, row_plot, PlotID, and Rating_Date
+
+# Merge MFR and AIA 
+aia_lsa <- merge(aia_plot_avg, lsa_plot_avg, by = "ID")
+
+# Plot AIA vs LSA Plot Aggregate Disease Scores, color by location
+plot_aia_lsa <- aia_lsa %>%
+ggplot(aes(x = lsa_avg_fhb, y = aia_avg_fhb, color = Location)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = FALSE, color = "blue") +  # Add linear regression line
+  geom_abline() +
+  labs(x = "Large Scale Annotation FHB %", 
+       y = "Automatic Image Analysis FHB %") +
+  xlim(0,100) +
+  ylim(0,100) +
+  theme_classic()
+print(plot_aia_lsa)
+ggsave("/Users/jcooper/Desktop/thesis_research/fhb_mineral/FHB_phenotyping_pipeline/automatic_image_annotation/2021model/aia_mia_lsa_plot/results/2021model_scatterplot_AIA_LSA.png", plot = plot_aia_lsa, width = 6, height = 4)
+
+# Correlations between AIA plot average FHB based on gradable spikes and LSA plot average FHB based on graded spikes from all 5 rater
+aia_lsa %>%  
+  summarise(cor(aia_avg_fhb, lsa_avg_fhb))
+
+# Correlations between AIA and LSA plot averages, by location
+aia_lsa %>% 
+  group_by(Location) %>%
+  summarise(cor(aia_avg_fhb, lsa_avg_fhb))
+
+```
