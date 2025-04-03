@@ -1,0 +1,188 @@
+---
+title: "Manual Image Annotation - Inter0-rater Reliability"
+author: "Julian Cooper"
+date: "2023-08-02"
+output: html_document
+---
+
+```{r setup, include=FALSE} 
+knitr::opts_chunk$set(warning = FALSE, message = FALSE) 
+```
+
+# Overview
+Compare disease annotations by all five raters on the same image
+Calculate pairwise and intra-class correlations
+
+# Load Libraries
+```{r,print = FALSE}
+
+library(ggplot2) # For plotting data
+library(tidyverse) # For manipulating/analyzing data
+library(ggridges)    # for making ridge plot
+library(viridis)     # color scaling in plot
+library(GGally) # For plotting correlation matrix
+library(Hmisc) # For calculating correlations and p-values
+library(irr) # For calculating ICC
+library(reshape2) # For reshaping correlation matrix
+
+```
+
+# Load and Format Manual Image Analysis Disease Ratings
+```{r load_data, "print.matrix" = FALSE}
+
+# Create an empty list to store the data frames for each rater
+rater_list <- list()
+
+# Loop through rater data frames
+for (i in (1:5)){
+
+  name <- paste0("rater", i) # create variable with rater name
+  
+  # Read in data for corresponding rater
+  file_path <- paste0("/Users/jcooper/Desktop/thesis_research/fhb_mineral/FHB_phenotyping_pipeline/manual_image_annotation/inter_rater_reliability_annotations/data/raw_data/", name, ".csv")
+  rater_data <- read.csv(file_path, header = TRUE)
+  
+  # Store the data frame in the list
+  rater_list[[name]] <- rater_data
+}
+
+# Format rater data frames
+merged_manual_image_analysis <- rater_list %>%
+  bind_rows() %>% # merge separate rater df
+  mutate(Rater_ID = case_when( # unique rater ID for each name
+    rater == 1 ~ "E",
+    rater == 2 ~"D",
+    rater == 3 ~ "B",
+    rater == 4 ~ "C",
+    rater == 5 ~ "A"
+    )) %>%
+  select(-rater) # Remove numerical rater ID columns
+
+# Rearrange df by Rater_Id column so order is A, B, C, D, E
+merged_manual_image_analysis_ordered <- merged_manual_image_analysis[order(merged_manual_image_analysis$Rater_ID),]
+
+# Make list of column names, subset into unique identifiers
+col_names <- colnames(merged_manual_image_analysis_ordered) # list of column names
+identifiers <- col_names[c(1:6)]
+
+# Pivot wide, one column for each rater
+merged_manual_image_analysis_ordered_wide <- merged_manual_image_analysis_ordered %>%
+  pivot_wider(id_cols = all_of(identifiers), names_from = "Rater_ID", values_from = "fhb_perc" )
+
+# Save formatted data
+write.csv(merged_manual_image_analysis_ordered_wide, "/Users/jcooper/Desktop/thesis_research/fhb_mineral/FHB_phenotyping_pipeline/manual_image_annotation/inter_rater_reliability_annotations/data/2022/wheat2022_mia_inter_rater_reliabilit.csv", row.names = FALSE)
+
+```
+
+# IRR stats, correlations, and coefficient of variance
+```{r stats, "print.matrix" = FALSE}
+
+# Load formatted IRR data
+irr <- read.csv("/Users/jcooper/Desktop/thesis_research/fhb_mineral/FHB_phenotyping_pipeline/manual_image_annotation/inter_rater_reliability_annotations/data/2022/wheat2022_mia_inter_rater_reliabilit.csv")
+
+# Average and SD disease per rater
+irr %>%
+  drop_na() %>%
+  pivot_longer(cols = c(7:11), names_to = "Rater_ID", values_to = "FHB_SEV") %>%
+  group_by(Rater_ID) %>%
+  summarise(avg_disease = mean(FHB_SEV),
+            sd_disease = sd(FHB_SEV))
+
+# Plot disease distribution of each rater and compare to theoretical bins used for image selection
+theory_vs_icc <- irr %>%
+  mutate("Theory" = as.numeric(str_extract(img_name, "(?<=bin_)\\d+"))) %>% # Parse image file name, pull out theoretical disease from bin #
+  pivot_longer(cols = c(7:12), names_to = "Rater_ID", values_to = "FHB_SEV") %>%
+  group_by(Rater_ID) %>%
+    ggplot( aes(y=Rater_ID, x=FHB_SEV,  fill=Rater_ID)) +
+    geom_density_ridges(alpha=0.6, bandwidth=2) +
+    scale_fill_viridis(discrete=TRUE) +
+    scale_color_viridis(discrete=TRUE) +
+    theme(
+        legend.position="none",
+        panel.spacing = unit(0.1, "lines"),
+        strip.text.x = element_text(size = 8)
+        ) +
+    xlab("FHB Severity") +
+    ylab("Rater Annotations") +
+  theme_classic() +
+  theme(legend.position = "none")
+print(theory_vs_icc)
+ggsave("/Users/jcooper/Desktop/thesis_research/fhb_mineral/FHB_phenotyping_pipeline/manual_image_annotation/inter_rater_reliability_annotations/results/irr_theoretical_actual_disease_distribution.jpg", plot = theory_vs_icc, width=6, height=4)
+
+# Pairwise Pearson correlations
+# Trim df to create matrix of raters and disease scores
+irr_trim <- irr[,7:11] 
+
+# Calculate correlation table
+corr <- round(cor(irr_trim, use="complete.obs"), 2)
+
+# Get upper triangle of the correlation matrix
+  get_upper_tri <- function(cormat){
+    cormat[lower.tri(cormat)]<- NA
+    return(cormat)
+  }
+upper_tri <- get_upper_tri(corr)
+
+# Reshape correlation matrix
+cor_melted <- melt(upper_tri)
+
+# Plot matrix
+irr_rating_correlation <- ggplot(data = cor_melted, aes(Var2, Var1, fill = value)) +
+  geom_tile(color = "white") +
+  scale_fill_gradient2(low = "blue", high = "red", mid = "white",
+                       midpoint = 0, na.value = "white", limit = c(-1, 1), space = "Lab",
+                       name = "Pearson\nCorrelation") +
+  coord_fixed() +
+  geom_text(aes(label = ifelse(!is.na(value), sprintf("%.2f", value), "")),
+            color = "black", size = 2.88) +  # Make NA boxes white
+  theme_classic() +
+  labs(x = "Rater") +
+  theme(
+    axis.title.y = element_blank(),
+    panel.grid.major = element_blank(),
+    panel.border = element_blank(),
+    panel.background = element_blank(),
+    axis.ticks = element_blank(),
+    legend.position = "none",
+  ) +
+  guides(fill = guide_colorbar(barwidth = 7, barheight = 1,
+                               title.position = "top", title.hjust = 0.5)) +
+  theme(text=element_text(size=8, family = "Helvetica"),
+        plot.margin = margin(t = 0,  # Top margin
+                             r = 0,  # Right margin
+                             b = 0,  # Bottom margin
+                             l = 0)) # Left margin)
+
+print(irr_rating_correlation)
+ggsave("/Users/jcooper/Desktop/thesis_research/fhb_mineral/FHB_phenotyping_pipeline/manual_image_annotation/inter_rater_reliability_annotations/results/irr_rating_correlation.png", plot = ica_rating_correlation, height = 5, width = 5)
+
+# Intraclass correlation (ICC) between all raters
+icc_result <- icc(irr_trim, model = "oneway", type = "agreement", unit = "single")
+print(icc_result)
+
+#To identify the variable with the most spread between values in a data frame, you can use a measure of variability or dispersion. One commonly used statistic for this purpose is the coefficient of variation (CV), which is the ratio of the standard deviation to the mean.
+#The coefficient of variation allows you to compare the variability of different variables, even if they are measured in different units or have different scales. A higher coefficient of variation indicates that the variable has a larger spread or variability between its values.
+
+irr %>%
+  pivot_longer(cols = c(7:11), names_to = "Rater_ID", values_to = "FHB_SEV") %>%
+  group_by(img_name) %>%
+  na.omit() %>%
+  summarise(CV = sd(FHB_SEV)/mean(FHB_SEV)) %>% # calculate coefficient of variation for each image
+  summarise(mean(CV, na.rm = TRUE))
+
+# Calculate CV for location
+irr %>%
+  pivot_longer(cols = c(7:11), names_to = "Rater_ID", values_to = "FHB_SEV") %>%
+  mutate(Location = substr(img_name, 12, 12),  # Extract the 12th character, S for Saint_Paul or C for Crookston
+         Location = ifelse(Location == "S", "StP",      # Conditionally replace 'S' with 'StP'
+                    ifelse(Location == "C", "Crk", Location))) %>%   # Conditionally replace 'C' with 'Crk'
+  group_by(img_name) %>%
+  na.omit() %>%
+  summarise(CV = sd(FHB_SEV)/mean(FHB_SEV), # calculate coefficient of variation for each image
+            Location = Location) %>% 
+    ungroup() %>%
+  group_by(Location) %>%
+  summarise(mean(CV, na.rm = TRUE)) # Average CV per location
+
+```
+```

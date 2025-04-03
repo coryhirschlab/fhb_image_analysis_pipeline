@@ -1,0 +1,316 @@
+---
+title: "Manual Image Annotation - Large Scale Annotation"
+author: "Julian Cooper"
+date: "2023-08-02"
+output: html_document
+---
+
+```{r setup, include=FALSE} 
+knitr::opts_chunk$set(warning = FALSE, message = FALSE) 
+```
+
+# Overview
+Compare plot aggregate disease scores from manual large scale annotation set of images done by five rater to in-field plot aggregate disease scores
+Evaluate skip rate in LSA image subset
+
+# Load Libraries
+```{r,print = FALSE}
+
+library(ggplot2) # For plotting data
+library(tidyverse) # For manipulating/analyzing data
+library(ggridges)    # for making ridge plot
+library(viridis)     # color scaling in plot
+library(GGally) # For plotting correlation matrix
+library(Hmisc) # For calculating correlations and p-values
+library(irr) # For calculating ICC
+
+```
+
+# Load and Format Large Scale Annotations
+```{r load_data, "print.matrix" = FALSE}
+
+# Get list of files in directory
+file_list <- list.files(path = "/Users/jcooper/Desktop/thesis_research/fhb_mineral/FHB_phenotyping_pipeline/manual_image_annotation/large_scale_annotations/data/raw_data", full.names = TRUE, no.. = TRUE)
+
+# Create an empty list to store the data frames for each lsa (five raters, two rounds)
+# lsa = large scale annotation
+lsa_list <- list()
+
+# Loop through rater data frames
+for (i in (1:length(file_list))){
+
+  # create variable with rater and round for each annotation file
+  name <- file_list[i] 
+  
+  # Read in data for corresponding rater
+  #file_path <- paste0("/Users/jcooper/Desktop/thesis_research/fhb_mineral/analysis/large_scale_annotations/data/raw_data", name, ".csv")
+  annotation_data <- read.csv(name, header = TRUE)
+  
+  # Extract rater number
+  annotation_data$rater <- as.numeric(gsub(".*rater(\\d+).*", "\\1", name))
+  annotation_data$round <- as.numeric(gsub(".*r(\\d+).*", "\\1", name))
+  
+  # Store the data frame in the list
+  lsa_list[[name]] <- annotation_data
+}
+
+# 1) Combine individual df and format
+lsa1 <- lsa_list %>%
+  bind_rows() %>% # merge separate rater df
+  mutate(Rater_ID = case_when( # unique rater ID for each name
+    rater == 1 ~ "E",
+    rater == 2 ~"D",
+    rater == 3 ~ "B",
+    rater == 4 ~ "C",
+    rater == 5 ~ "A"
+    )) %>%
+  mutate(Location = case_when( 
+    location == "St_Paul" ~ "StP",
+    location == "Crookston" ~ "Crk")) %>%
+  select(-c(location, rater))
+
+# 2) Merge LSA results with field key 
+# Load 2022 wheat field key
+field_key <- read.csv("/Users/jcooper/Desktop/thesis_research/fhb_mineral/FHB_phenotyping_pipeline/manual_field_ratings/data/raw_data/wheat2022_HTP_plotID_row_plot_key.csv") #load plot map key
+# Merge df
+lsa2 <- merge(lsa1, field_key, by = c("Location", "row_plot"))
+
+# 3) Extract date and make unique identifier column with location, row_plot, PlotID, and Rate_Date
+lsa2$Rating_Date <- substr(gsub("^(.{10}).*", "\\1", lsa2$file_stem), 1, 10)
+lsa3 <- lsa2 %>%
+  mutate(ID = paste(Location, row_plot, PlotID, Rating_Date, sep = "_")) 
+
+# Save formatted data
+write.csv(lsa3, "/Users/jcooper/Desktop/thesis_research/fhb_mineral/FHB_phenotyping_pipeline/manual_image_annotation/large_scale_annotations/data/2022/wheat2022_mia_large_scale_annotations.csv", row.names = FALSE)
+
+```
+
+# LSA Average Disease Statistics
+```{r}
+# Load data
+lsa <- read.csv("/Users/jcooper/Desktop/thesis_research/fhb_mineral/FHB_phenotyping_pipeline/manual_image_annotation/large_scale_annotations/data/2022/wheat2022_mia_large_scale_annotations.csv")
+
+# Avg. and SD disease for all spikes
+lsa %>%
+  summarise(mean_all = mean(fhb_perc, na.rm = TRUE),
+            sd_all = sd(fhb_perc, na.rm = TRUE))
+
+# Avg. and SD disease per rater
+lsa %>%
+  group_by(Rater_ID) %>%
+  summarise(avg_FHB = mean(fhb_perc, na.rm = TRUE),
+            sd_FHB = sd(fhb_perc, na.rm = TRUE))
+
+# Plot average disease per plot in total data set and per rater
+# Rater average disease per plot
+lsa_rater_plot_avg <- lsa %>%
+  pivot_wider(names_from = Rater_ID, values_from = fhb_perc) %>% # pivot wide, new column for each rater 
+  group_by(ID) %>%
+  summarise(across(11:15, mean, na.rm = TRUE)) #summarise stats across rater columns
+
+# Average disease per plot, total and gradable heads, merge with rater averages
+lsa_avg <- lsa %>%
+  group_by(ID) %>% # group by ID
+  summarise(
+    avg_fhb = mean(fhb_perc, na.rm = TRUE), # Average FHB per plot
+    total_count = n(), # Total number of heads
+    na_count = sum(is.na(fhb_perc)) # Skipped heads
+    ) %>%
+  mutate(graded_heads = total_count - na_count) %>% # Graded heads
+  right_join(lsa_rater_plot_avg, by = "ID") %>% # Merge back with original df
+  separate(ID, into = c('Location', 'row_plot', 'PlotID', "Rating_Date"), sep = "_", remove = FALSE) # separate ID back into location, row_plot, and PlotID
+
+# Set order for plot
+order <- c("avg_fhb", "A", "B", "C", "D", "E") # Set y axis order
+
+# Ridge plot of results
+lsa_disease_distribution <- lsa_avg %>%
+    pivot_longer(cols = c(avg_fhb, A, B, C, D, E), names_to = "Rater_ID", values_to = "FHB_SEV") %>% # Pivot longer, one column with average and each rater disease
+    mutate(Rater_ID = factor(Rater_ID, levels = order)) %>% # Order for plot
+    group_by(Rater_ID) %>%
+    ggplot( aes(y=Rater_ID, x=FHB_SEV,  fill=Rater_ID)) +
+    geom_density_ridges(alpha=0.6, bandwidth=2) +
+    scale_fill_viridis(discrete=TRUE) +
+    scale_color_viridis(discrete=TRUE) +
+    theme(
+        legend.position="none",
+        panel.spacing = unit(0.1, "lines"),
+        strip.text.x = element_text(size = 8)
+        ) +
+    xlab("FHB Severity") +
+    ylab("Rater Annotations") +
+  theme_classic()+
+  scale_y_discrete( 
+    labels = c("Average", "A", "B", "C", "D", "E")) + # Customize the labels
+  theme(legend.position = "none")
+print(lsa_disease_distribution)
+ggsave("/Users/jcooper/Desktop/thesis_research/fhb_mineral/FHB_phenotyping_pipeline/manual_image_annotation/large_scale_annotations/results/lsa_disease_distribution.png", plot = lsa_disease_distribution, width = 6, height = 4)
+```
+
+# LSA Correlations With MFR
+```{r}
+# Load MFR (manual field rating) data
+mfr <- read.csv("/Users/jcooper/Desktop/thesis_research/fhb_mineral/FHB_phenotyping_pipeline/manual_field_ratings/data/2022/wheat2022_manual_field_rating.csv")
+
+# Calculate MFR plot average FHB based on ALL 5 RATERS
+mfr_all_rater_plot_avg <- mfr %>%
+  pivot_longer(cols = c("A", "B", "C", "D", "E"), values_to = "fhb_perc", names_to = "Rater_ID") %>% # Pivot long by rater ID
+  group_by(ID) %>% # group by ID for plot average
+  summarise(mfr_avg_fhb = mean(fhb_perc, na.rm = TRUE))  %>% # Get plot average
+  ungroup() %>%
+  right_join(mfr, by = "ID") # Merge back with original df
+
+# Trim and format data frame
+mfr_avg <- mfr_all_rater_plot_avg[c(1:2,13:17)]
+colnames(mfr_avg) <- c("ID", "MFR_AVG_ALL", "MFR_A", "MFR_B", "MFR_C", "MFR_D", "MFR_E")
+
+# Load LSA (large scale annotation) data
+lsa <- read.csv("/Users/jcooper/Desktop/thesis_research/fhb_mineral/FHB_phenotyping_pipeline/manual_image_annotation/large_scale_annotations/data/2022/wheat2022_mia_large_scale_annotations.csv")
+
+# Plot average disease per plot in total data set and per rater
+# Rater average disease per plot
+lsa_rater_plot_avg <- lsa %>%
+  pivot_wider(names_from = Rater_ID, values_from = fhb_perc) %>% # pivot wide, new column for each rater 
+  group_by(ID) %>%
+  summarise(across(11:15, mean, na.rm = TRUE)) %>% #summarise stats across rater columns
+  relocate(A, .after = last_col()) %>%
+  relocate(B, .after = last_col()) %>%
+  relocate(C, .after = last_col()) %>%
+  relocate(D, .after = last_col()) %>%
+  relocate(E, .after = last_col())
+
+# Average disease per plot, total and gradable heads, merge with rater averages
+lsa_avg <- lsa %>%
+  group_by(ID) %>% # group by ID
+  summarise(
+    avg_fhb = mean(fhb_perc, na.rm = TRUE)) %>% # Average FHB per plot
+  right_join(lsa_rater_plot_avg, by = "ID") %>% # Merge back with original df
+  separate(ID, into = c('Location', 'row_plot', 'PlotID', "Rating_Date"), sep = "_", remove = FALSE) # separate ID back into location, row_plot, and PlotID
+
+# Format data frame
+colnames(lsa_avg)[c(1, 6:11)] <- c("ID","LSA_AVG_ALL", "LSA_A", "LSA_B", "LSA_C", "LSA_D", "LSA_E")
+
+# Merge MFR and LSA data
+mfr_vs_lsa <- merge(lsa_avg, mfr_avg, by = "ID")
+
+# Correlation between MFR average of all five raters and LSA average based on all spikes
+mfr_vs_lsa %>%
+  summarise(cor(LSA_AVG_ALL, MFR_AVG_ALL))
+
+# Correlation between MFR average of all five raters and LSA average based on all spikes per location
+mfr_vs_lsa %>%
+  group_by(Location) %>%
+  summarise(cor(LSA_AVG_ALL, MFR_AVG_ALL))
+
+# Scatterplot of MFR average from all five raters and LSA average based on all spikes, colored by location
+scatterplot_mfr_lsa <- mfr_vs_lsa %>%
+ggplot(aes(x = LSA_AVG_ALL, y = MFR_AVG_ALL, color = Location)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = FALSE, color = "blue") +  # Add linear regression line
+  labs(x = "Plot Avg. LSA FHB %", 
+       y = "Plot Avg. MFR FHB %") +
+  theme_classic() +
+  xlim(0,100) +
+  ylim(0,100) +
+  coord_fixed()
+print(scatterplot_mfr_lsa)
+ggsave("/Users/jcooper/Desktop/thesis_research/fhb_mineral/FHB_phenotyping_pipeline/manual_image_annotation/large_scale_annotations/results/mfr_vs_lsa_scatterplot.png", plot = scatterplot_mfr_lsa, width = 5, height = 7)
+
+# Correlation between LSA plot averages based on all spikes and individual MFR plot disease scores from each rater
+mfr_vs_lsa %>%
+  na.omit() %>%
+  select(LSA_AVG_ALL, MFR_A, MFR_B, MFR_C, MFR_D, MFR_E) %>%
+  cor() %>%
+  .[1,]
+
+# All raters got different spikes for the LSA image subset, so individual rater plot average correlations aren't a true 1:1 comparison. But still interesting to check.
+mfr_vs_lsa %>%
+  na.omit() %>%
+  select(LSA_A, LSA_B, LSA_C, LSA_D, LSA_E) %>%
+  cor()
+
+```
+# LSA Images Skip Rate
+```{r}
+
+# Load LSA (large scale annotation) data
+lsa <- read.csv("/Users/jcooper/Desktop/thesis_research/fhb_mineral/FHB_phenotyping_pipeline/manual_image_annotation/large_scale_annotations/data/2022/wheat2022_mia_large_scale_annotations.csv")
+
+# Calculate gradable, skipped, and total spikes for full dataset
+lsa_skip_all <- lsa %>%
+  group_by(ID) %>% # group by ID
+  summarise(
+    count = n(), # Total number of heads
+    na_count = sum(is.na(fhb_perc)), # Skipped heads
+    graded_heads = count - na_count) %>% # Graded heads
+  summarise(total = sum(count), # Sum of all spikes in LSA dataset
+            graded = sum(graded_heads), # Sum of graded spikes
+            skip = sum(na_count)) # Sum of skipped spikes
+
+# Format results for merging and plotting
+lsa_skip_all$ID <- " " # Add blank ID column
+lsa_skip_all$Category <- "Full" # Add Category
+lsa_skip_all <- lsa_skip_all %>% # Reorder to be ID, Graded, Skipped
+  select(ID, total, graded, skip, Category)
+
+# Calculate gradable, skipped, and total spikes for each location
+lsa_skip_location <- lsa %>%
+  group_by(ID) %>% # group by ID
+  summarise(
+    count = n(), # Total number of heads
+    na_count = sum(is.na(fhb_perc)), # Skipped heads
+    graded_heads = count - na_count) %>% # Graded heads
+  mutate(Location = substr(ID, 1, 3)) %>% # Extract location from ID
+  group_by(Location) %>%
+  summarise(total = sum(count), # Sum of all spikes in LSA dataset
+            graded = sum(graded_heads), # Sum of graded spikes
+            skip = sum(na_count)) # Sum of skipped spikes
+
+# Format results for merging and plotting
+colnames(lsa_skip_location)[1] <- "ID" # Change Location column name to ID
+lsa_skip_location$Category <- "Location" # Add Category
+
+
+# Calculate gradable, skipped, and total spikes for each rater
+lsa_skip_rater <- lsa %>%
+  group_by(Rater_ID, ID) %>%
+  summarise(
+    count = n(), # Total number of heads
+    na_count = sum(is.na(fhb_perc)), # Skipped heads
+    graded_heads = count - na_count) %>% # Graded heads
+   summarise(total = sum(count), # Sum of all spikes in LSA dataset
+            graded = sum(graded_heads), # Sum of graded spikes
+            skip = sum(na_count)) # Sum of skipped spikes
+
+# Format results for merging and plotting
+colnames(lsa_skip_rater)[1] <- "ID" # Change Rater_ID to ID
+lsa_skip_rater$Category <- "Rater" # Add Category
+
+# Merge skip rate data sets
+lsa_skip_rates <- rbind(lsa_skip_all, lsa_skip_location, lsa_skip_rater)
+
+# Calculate skip percents
+lsa_skip_rates <- lsa_skip_rates %>%
+  mutate(perc = skip / (skip + graded))
+
+# Plot grouped barplots with skip rates per category
+
+skip_rates_plot <- lsa_skip_rates %>%
+  pivot_longer(cols = c(graded, skip), names_to = "Spike_Count", values_to = "Skip_Grade") %>%
+  ggplot(aes(x = ID, y = Skip_Grade, fill = Spike_Count)) +
+  geom_bar(stat = "identity", position = "stack") +
+  facet_wrap(~ Category, scales = "free_x", ncol = 1) +
+  theme_classic() +
+  labs(y = "Spike Count", 
+       title = "LSA: Skipped vs. Graded Spikes") +
+  scale_fill_manual(values = c("graded" = "blue", "skip" = "red"),
+                    labels = c("Graded", "Skipped"),
+                    name = "Gradability") +
+  theme(axis.title = element_blank(),
+        axis.ticks.x = element_blank())
+
+print(skip_rates_plot)
+ggsave("/Users/jcooper/Desktop/thesis_research/fhb_mineral/FHB_phenotyping_pipeline/manual_image_annotation/large_scale_annotations/results/lsa_skip_rates.png", plot = skip_rates_plot, width = 4, height = 6)
+
+```
+

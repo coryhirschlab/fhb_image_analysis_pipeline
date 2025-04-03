@@ -1,0 +1,95 @@
+---
+title: "2021 FHB Pipeline Automatic Image Annotation Data Processing"
+author: "Julian Cooper"
+date: "2023-09-27"
+output: html_document
+---
+
+```{r setup, include=FALSE} 
+knitr::opts_chunk$set(warning = FALSE, message = FALSE) 
+```
+
+# Overview
+Data processing and summary statistics for 2021 FHB Pipeline Automatic Image Annotation disease inferences. 
+
+# Load Libraries
+```{r,print = FALSE}
+
+library(ggplot2) # For plotting data
+library(tidyverse) # For manipulating/analyzing data
+library(stringr) # For regex
+library(GGally) # For ggcor
+library(irr) # For calculating ICC
+library(ggridges)    # for making ridge plot
+library(viridis)     # color scaling in plot
+
+```
+
+# Load and Format Data 
+```{r}
+
+# Load data, aia = Automatic Image Analysis
+# StP 07132022
+aia_1 <- read.csv("/Users/jcooper/Desktop/thesis_research/fhb_mineral/FHB_phenotyping_pipeline/automatic_image_annotation/2021model/raw_data/results_summary_v1-2021_models-umn_wheat_fhb_image_07_13_2022_grain_heads_only_vertical_fhb_registered.csv")
+
+# StP 07182022 and Crk 07282022
+aia_2 <- read.csv("/Users/jcooper/Desktop/thesis_research/fhb_mineral/FHB_phenotyping_pipeline/automatic_image_annotation/2021model/raw_data/results_summary_v1-2021_models-umn_wheat_fhb_image_annotation_date_grain_heads_only_v_fhb_registered.csv")
+
+# 07202022
+aia_3 <- read.csv("/Users/jcooper/Desktop/thesis_research/fhb_mineral/FHB_phenotyping_pipeline/automatic_image_annotation/2021model/raw_data/results_summary_v1-2021_models-umn_wheat_fhb_image_07_20_2022_grain_heads_only_vertical_fhb_registered.csv")
+
+# Add field map key
+field_key <- read.csv("/Users/jcooper/Desktop/thesis_research/fhb_mineral/FHB_phenotyping_pipeline/manual_field_ratings/data/raw_data/wheat2022_HTP_plotID_row_plot_key.csv") #load plot map key
+
+# Combine AIA dates
+aia_temporal <- rbind(aia_1, aia_2)
+aia_temporal <- rbind(aia_temporal, aia_3)
+
+# 1) Change location names to abbreviations
+aia1 <- aia_temporal %>%
+  mutate(Location = case_when( 
+    location == "St_Paul" ~ "StP",
+    location == "Crookston" ~ "Crk")) %>%
+  select(-location)
+
+# 2) Merge AIA results with field key 
+
+aia2 <- merge(aia1, field_key, by = c("Location", "row_plot"))
+
+# 3) Extract date and make unique identifier column with location, row_plot, PlotID, and Rate_Date
+aia2$Rating_Date <- substr(gsub("^(.{10}).*", "\\1", aia2$file_stem), 1, 10)
+aia3 <- aia2 %>%
+  mutate(ID = paste(Location, row_plot, PlotID, Rating_Date, sep = "_")) 
+
+# Save df
+write.csv(aia3, "/Users/jcooper/Desktop/thesis_research/fhb_mineral/FHB_phenotyping_pipeline/automatic_image_annotation/2021model/data_processing/data/wheat2021model_automatic_image_annotation.csv", row.names = FALSE)
+```
+
+# Summary Statistics
+```{r}
+
+aia <- read.csv("/Users/jcooper/Desktop/thesis_research/fhb_mineral/FHB_phenotyping_pipeline/automatic_image_annotation/2021model/data_processing/data/wheat2021model_automatic_image_annotation.csv")
+
+# Spikes per date
+# Disease per date
+# SD of disease per date
+aia %>%
+  group_by(Rating_Date) %>%
+  summarise(count = n(), 
+            mean = mean(fhb_percentage), 
+            sd = sd(fhb_percentage)) 
+
+# Gradability threshold (0.50) was chosen to conform to default image classification procedures (>0,50 ungradable, <0.50 gradable) per Mineral recommendation.
+
+# Spikes per date after filtering for gradability
+# Disease per date after filtering for gradability
+# SD of disease per date after filtering for gradability
+
+aia %>%
+  filter(gradability_prob <= 0.50) %>%
+  group_by(Rating_Date) %>%
+  summarise(count_filter = n(), 
+            mean_filter = mean(fhb_percentage), 
+            sd_filter = sd(fhb_percentage)) 
+
+```

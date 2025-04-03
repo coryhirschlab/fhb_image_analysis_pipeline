@@ -1,0 +1,465 @@
+---
+title: "Manual Field Rating"
+author: "Julian Cooper"
+date: "2023-09-26"
+output: html_document
+---
+```{r setup, include=FALSE} 
+knitr::opts_chunk$set(warning = FALSE, message = FALSE) 
+```
+
+# Overview
+Compare plot aggregate disease scores done by five raters in the field
+Analyze pairwise rater correlations and inter-class correlation coefficients across time
+
+# Load Libraries
+```{r,include=FALSE}
+
+library(readxl) # For reading in data from Excel sheet
+library(ggplot2) # For plotting data
+library(tidyverse) # For manipulating/analyzing data
+library(ggridges)    # for making ridge plot
+library(viridis)     # color scaling in plot
+library(GGally) # For plotting correlation matrix
+library(Hmisc) # For calculating correlations and p-values
+library(irr) # For calculating ICC
+library(rmarkdown) # For formatting rmarkdown
+library(reshape2) # For reshaping correlation matrix
+
+
+```
+
+# Load and Format Manual In-Field Disease Ratings
+```{r load_data, "print.matrix" = FALSE}
+
+# Load St. Paul (StP) data
+w_ratings_stpaul <- read_xlsx("/Users/jcooper/Desktop/thesis_research/fhb_mineral/FHB_phenotyping_pipeline/manual_field_ratings/data/raw_data/2022FHB_HTP_IRV_scores-2.xlsx", sheet=2, col_names=TRUE, col_types=c("text", "guess", "text", "text", "text", "numeric", "text", "numeric", "guess"))
+
+# Load Crookston (Crk) data
+w_ratings_crookston <- read_xlsx("/Users/jcooper/Desktop/thesis_research/fhb_mineral/FHB_phenotyping_pipeline/manual_field_ratings/data/raw_data/2022FHB_HTP_IRV_scores-2.xlsx", sheet=4, col_names=TRUE, col_types=c("text", "guess", "text", "text", "text", "numeric", "text", "numeric", "guess"))
+
+# Merge St. Paul and Crookston data
+w_ratings <- rbind(w_ratings_crookston, w_ratings_stpaul)
+w_ratings$Rating_Date <- as.character(w_ratings$Rating_Date) # Change Rating_Date to character
+
+# 1) Format wheat rating data
+w_ratings1 <- w_ratings %>%
+  filter(Set == "SteffensonHTP") %>% # filter out 2-row high-throughput plots
+  mutate(Rater_ID = case_when( # assign unique rater ID for each name
+    endsWith(Rater, "Julian") ~ "D",
+    endsWith(Rater, "Alejandra") ~ "E",
+    endsWith(Rater, "Rae") ~ "C",
+    endsWith(Rater, "Oadi") ~ "B",
+    endsWith(Rater, "Tamas") ~ "A"
+    ))
+
+# 2) Remove names of raters and tags
+w_ratings2 <- w_ratings1 %>%
+  select(-c(Rater))
+
+# 3) Rearrange df by Rater_Id column so order is A, B, C, D, E
+w_ratings3 <- w_ratings2[order(w_ratings2$Rater_ID),]
+# Rearrange df by Rater_Id column so order is A, B, C, D, E
+
+# 2022 Crookston ratings were taken over two days - 7/27 and 7/28. Change all rating dates to 7/28 to merge results. 
+w_ratings3$Rating_Date[w_ratings3$TrialName == "CrkFHB_WheatHTP_scores"] <- "2022-07-28"
+
+# 4) Add StP or Crk location tag, row_plot key
+field_key <- read.csv("/Users/jcooper/Desktop/thesis_research/fhb_mineral/FHB_phenotyping_pipeline/manual_field_ratings/data/raw_data/wheat2022_HTP_plotID_row_plot_key.csv") #load plot map key
+w_ratings3$Location <- gsub("^([A-Za-z]{3}).*", "\\1", w_ratings3$TrialName) #regex to pull location from trial name
+w_ratings3 <- merge(w_ratings3, field_key, by = c("Location", "PlotID")) # Merge df # combine manual field ratings df with field key df
+w_ratings4 <- w_ratings3 %>%
+  mutate(ID = paste(Location, row_plot, PlotID, Rating_Date, sep = "_")) # Make  ID column with unique identity for each plot
+
+# 5) Count number of MAT and NA for each ID, pivot wide, filter out mature or missing plots
+
+# TAMAS AND OADI BOTH HAD PLOT WITH SCORES NOT 0-100 BY 5% (22 AND 52). REMOVED FROM RAW DATA ON 8/17.
+
+w_ratings5 <- w_ratings4 %>%
+  group_by(ID) %>%
+  mutate(count_NA = sum(is.na(FHB_SEV)),
+         count_MAT = sum(Tags == "MAT", na.rm = TRUE)) %>%
+  select(-Tags) %>%
+  ungroup() %>%
+  pivot_wider(names_from = "Rater_ID", values_from = "FHB_SEV") %>%
+  filter(count_NA <= 2) %>%
+  filter(count_MAT <= 2) %>%
+  relocate(A, .after = last_col()) %>%
+  relocate(B, .after = last_col()) %>%
+  relocate(C, .after = last_col()) %>%
+  relocate(D, .after = last_col()) %>%
+  relocate(E, .after = last_col())
+  
+
+# Count plots per location/date
+paged_table(w_ratings5 %>%
+  group_by(Rating_Date) %>%
+  summarise(count = n()))
+
+# Save formatted data
+write.csv(w_ratings5, "/Users/jcooper/Desktop/thesis_research/fhb_mineral/FHB_phenotyping_pipeline/manual_field_ratings/data/2022/wheat2022_manual_field_rating.csv", row.names = FALSE)
+
+```
+
+# Plot Disease Distributions and Rater Correlations for All Location - Date Iterations
+```{r stats and corr, "print.matrix" = FALSE}
+
+# Load formatted data
+#w = in-field wheat
+w_rating <- read.csv("/Users/jcooper/Desktop/thesis_research/fhb_mineral/FHB_phenotyping_pipeline/manual_field_ratings/data/2022/wheat2022_manual_field_rating.csv")
+
+# Plot histograms of disease for each date
+w_rating_disease_distribution <- 
+  w_rating %>%
+    pivot_longer(cols = c("A", "B", "C", "D", "E"), names_to = "Rater_ID", values_to = "FHB_SEV") %>%
+    group_by(Rating_Date) %>%
+    ggplot( aes(y=Rating_Date, x=FHB_SEV,  fill=Location)) +
+    geom_density_ridges(alpha=0.6, bandwidth=2) +
+    scale_fill_viridis(discrete=TRUE) +
+    scale_color_viridis(discrete=TRUE) +
+    theme(
+        legend.position="none",
+        panel.spacing = unit(0.1, "lines"),
+        strip.text.x = element_text(size = 8)
+        ) +
+    xlab("FHB Severity (%)") +
+    ylab("Frequency") +
+    ggtitle("Distribution of wheat ratings") +
+  theme_minimal()
+print(w_rating_disease_distribution)
+# Save plot
+ggsave("/Users/jcooper/Desktop/thesis_research/fhb_mineral/FHB_phenotyping_pipeline/manual_field_ratings/results/w_rating_temporal_disease_distribution.png", plot = w_rating_disease_distribution, width = 6, height = 4)
+
+# Iterations of Wheat 2-row In-Field Ratings
+
+# Make empty data frame to store all results 
+w_results_all <- data.frame(matrix(ncol = 10, nrow = 0))
+colnames(w_results_all) <- c("Trial", "Date", "Avg_disease", "SD_disease", "Avg_Cor", "SD_Cor", "ICC_value", "ICC_upper", "ICC_lower", "Subjects")
+
+# Make data frame with location-date pairs
+w_iterations <- data.frame(
+  trial = c("StPFHB_WheatHTP_scores",
+            "StPFHB_WheatHTP_scores",
+            "StPFHB_WheatHTP_scores",
+            "CrkFHB_WheatHTP_scores",
+            "StPFHB_WheatHTP_scores",
+            "ALL_LOCATIONS",
+            "StP_and_Crk"),
+  date = c(
+    "2022-07-13",
+    "2022-07-18",
+    "2022-07-20",
+    "2022-07-28",
+    "2022-07-13, 2022-07-18, 2022-07-20",
+    "ALL_DATES",
+    "2022-07-18_and_2022-07-28")
+  )
+
+# Loop through iterations
+for (i in 1:nrow(w_iterations)){
+  
+# Make empty data frame to each iteration results 
+
+w_results_iteration <- data.frame(matrix(ncol = 10, nrow = 1))
+colnames(w_results_iteration) <- c("Trial", "Date", "Avg_disease", "SD_disease", "Avg_Cor", "SD_Cor", "ICC_value", "ICC_upper", "ICC_lower", "ICC_Subjects")
+
+  # For single location-date combinations
+  if (i %in% c(1:4)) {
+     w_rating_iteration <- w_rating %>%
+  filter(TrialName == w_iterations[i, 1] & Rating_Date == w_iterations[i, 2])
+
+  }
+
+  # For StP on all dates
+  if (i == 5){
+    w_rating_iteration <- w_rating %>%
+  filter(TrialName == "StPFHB_WheatHTP_scores")
+  }
+
+  # For all locations on all dates
+  if (i == 6){
+    w_rating_iteration <- w_rating
+  }
+
+ # For all locations on all dates with manual image annotations
+  if (i == 7){
+    w_rating_iteration <- w_rating %>%
+  filter(Rating_Date %in% c("2022-07-18", "2022-07-28"))
+    }
+
+  # Print iteration
+  # cat(w_iterations[i, 1], w_iterations[i, 2], "\n")
+
+   # Save location and date as variable for future identification
+   t <- w_iterations[i, 1]
+   d <- w_iterations[i, 2]
+
+   # Save identifiers to results df
+  w_results_iteration$Trial <- t
+  w_results_iteration$Date <- d
+   
+#################################################### 
+# Use this section of code to check specific iterations
+    
+# t <- "StPFHB_WheatHTP_scores"     # TrialName - "StPFHB_WheatHTP_scores" "CrkFHB_WheatHTP_scores"
+# d <- "2022-07-18"                 #Rating_Date - "2022-07-13" "2022-07-18" "2022-07-20" "2022-07-28"
+# 
+# # Filter data for desired iteration
+# w_rating_iteration <- w_rating %>%
+#   filter(TrialName == t) %>%
+#   filter(Rating_Date == d)
+
+####################################################
+# Mean and SD disease severity for entire iteration
+ mean_disease <- w_rating_iteration %>%
+  drop_na() %>%
+  pivot_longer(cols = c("A", "B", "C", "D", "E"), names_to = "Rater_ID", values_to = "FHB_SEV") %>%
+  summarise(mean(FHB_SEV))
+  
+sd_disease <- w_rating_iteration %>%
+  drop_na() %>%
+  pivot_longer(cols = c("A", "B", "C", "D", "E"), names_to = "Rater_ID", values_to = "FHB_SEV") %>%
+  summarise(sd(FHB_SEV))
+ 
+w_results_iteration$Avg_disease <- mean_disease$`mean(FHB_SEV)`
+w_results_iteration$SD_disease <- sd_disease$`sd(FHB_SEV)`
+  
+# Mean, SD, Min, and Max disease severity per rater
+stats <- c(mean, sd, min, max) # list of desired stats
+stats_names <- c("mean", "sd", "min", "max")  # names of desired stats
+raters <- c("A", "B", "C", "D", "E") # list of raters
+
+w_rating_stats <- w_rating_iteration %>%
+  drop_na() %>%
+  summarise(across(12:16, stats)) #summarise stats across rater columns
+
+# Convert summary stats into table
+num_elements <- length(w_rating_stats) # output, number of stats x number of raters
+num_columns <- length(stats) # number of stats
+num_rows <- ceiling(num_elements / num_columns) # Calculate the number of rows needed to accommodate all elements in the list
+
+# Create a matrix with column for each stat and the appropriate number of rows
+rater_stats_matrix <- matrix(w_rating_stats, nrow = num_rows, ncol = num_columns, byrow = TRUE)
+colnames(rater_stats_matrix) <- stats_names
+rownames(rater_stats_matrix) <- raters
+
+# Print iteration and Stats
+#cat(i, j)
+
+#print(rater_stats_matrix)
+####################################################
+# Plot distributions for iteration
+
+iteration_disease_distribution <- w_rating_iteration %>%
+    pivot_longer(cols = c("A", "B", "C", "D", "E"), names_to = "Rater_ID", values_to = "FHB_SEV") %>%
+    group_by(Rater_ID) %>%
+    ggplot( aes(y=Rater_ID, x=FHB_SEV,  fill=Rater_ID)) +
+    geom_density_ridges(alpha=0.6, bandwidth=2) +
+    scale_fill_viridis(discrete=TRUE) +
+    scale_color_viridis(discrete=TRUE) +
+    theme(
+        legend.position="none",
+        panel.spacing = unit(0.1, "lines"),
+        strip.text.x = element_text(size = 8)
+        ) +
+    xlab("FHB Severity (%)") +
+    ylab("Frequency") +
+    ggtitle(paste0("Distribution of wheat ratings", "\n", t, "\n", d)) +
+  theme_minimal() +
+  theme(legend.position = "none")
+print(iteration_disease_distribution)
+ggsave(paste0("/Users/jcooper/Desktop/thesis_research/fhb_mineral/FHB_phenotyping_pipeline/manual_field_ratings/results/", t, "_", d, "/", t, "_", d, "_disease_distribution.png"), plot = iteration_disease_distribution, width = 6, height = 4)
+
+####################################################
+# Pairwise Pearson correlations
+# Pearson correlation quantifies the linear relationship between two continuous variables. 
+# Trim df to create matrix of raters and disease scores
+w_rating_iteration_trimmed <- w_rating_iteration[,12:16] 
+
+# Matrices with correlation for all HTP
+rater_cor_matrix <- cor(w_rating_iteration_trimmed, method = "pearson", use = "pairwise.complete.obs") # calculate pairwise pearson correlations 
+rater_cor_data <- as.data.frame(as.table(rater_cor_matrix)) # convert to data frame
+rater_cor_data <- rater_cor_data %>%                                                    
+unite("Pair", Var1, Var2, remove=TRUE) # merge rater designations to assign unique pairwise observation
+colnames(rater_cor_data) <- c("Pairwise_Observation", "Pearson_Correlation") # change column names
+
+# Matrices with p-values for all HTP
+rater_p_values <- rcorr(as.matrix(w_rating_iteration_trimmed), type = "pearson")$P # calculate p-values for pairwise pearson correlations
+rater_p_data <- as.data.frame(as.table(rater_p_values)) # convert to data frame
+rater_p_data <- rater_p_data %>%                                                    
+    unite("Pair", Var1, Var2, remove=TRUE) # merge rater designations to assign unique pairwise observation
+colnames(rater_p_data) <- c("Pairwise_Observation", "P_Value") # change column names
+
+# Merge correlation and p-value data frames
+cor_p <- merge(rater_cor_data, rater_p_data, by = "Pairwise_Observation")
+#print(cor_p)
+
+# Save average pairwise pearson correlation and SD
+mean_cor <- cor_p %>% # Mean Pearson Pairwise Correlation
+  filter(Pearson_Correlation < 1) %>% # filter self pairings (AA, BB, CC, etc.)
+  summarise(mean(Pearson_Correlation))
+
+sd_cor <- cor_p %>% # SD Pearson Pairwise Correlation
+  filter(Pearson_Correlation < 1) %>% # filter self pairings (AA, BB, CC, etc.)
+  summarise(sd(Pearson_Correlation))
+
+# Save to iteration data frame
+w_results_iteration$Avg_Cor <- mean_cor$`mean(Pearson_Correlation)`
+w_results_iteration$SD_Cor <- sd_cor$`sd(Pearson_Correlation)`
+
+####################################################
+# Intraclass correlation (ICC) between all raters
+# Intra-class correlation (ICC) is a statistical measure used to assess the degree of similarity or agreement among multiple measurements or observations taken on the same subjects or items. It is commonly used in the context of reliability and agreement analysis in research studies.
+# The ICC quantifies the proportion of the total variance in the data that is attributed to the variability between the groups (subjects, items, etc.), relative to the total variance.
+
+#For i = 1:4 -> One location, one time point, multiple raters
+#One-way random effects ICC (ICC[1,1]): This is appropriate when the raters or measurements are randomly selected from a larger pool of raters, and you want to generalize the results to a larger population of raters or items.
+
+if (i %in% c(1:4)) {
+icc_result <- icc(w_rating_iteration_trimmed, model = "oneway", type = "agreement", unit = "single")
+#print(icc_result)
+}
+
+# For i = 5:6 -> One-multiple locations, multiple time points, multiple raters
+# Two-way random effects ICC (ICC[2,1]): This is used when there are multiple raters providing ratings for the same items, and both the raters and items are considered random samples from a larger population.
+
+if (i %in% c(5:7)) {
+  icc_result <- icc(w_rating_iteration_trimmed, model = "twoway", type = "agreement", unit = "single")
+#print(icc_result)
+}
+
+# Extract ICC results and save ICC value and upper/lower CI in iteration results df
+w_results_iteration$ICC_value <- icc_result$value
+w_results_iteration$ICC_upper <- icc_result$ubound
+w_results_iteration$ICC_lower <- icc_result$lbound
+w_results_iteration$ICC_Subjects <- icc_result$subjects
+
+# Plot correlation matrix and ICC
+# Use code and format from paper code
+corr <- round(cor(w_rating_iteration_trimmed, use="complete.obs"), 2)
+
+# Get upper triangle of the correlation matrix
+  get_upper_tri <- function(cormat){
+    cormat[lower.tri(cormat)]<- NA
+    return(cormat)
+  }
+upper_tri <- get_upper_tri(corr)
+
+# Reshape correlation matrix
+cor_melted <- melt(upper_tri)
+
+# Plot matrix
+w_rating_correlation <- ggplot(data = cor_melted, aes(Var2, Var1, fill = value)) +
+  geom_tile(color = "white") +
+  scale_fill_gradient2(low = "blue", high = "red", mid = "white",
+                       midpoint = 0, na.value = "white", limit = c(-1, 1), space = "Lab",
+                       name = "Pearson\nCorrelation") +
+  coord_fixed() +
+  geom_text(aes(label = ifelse(!is.na(value), sprintf("%.2f", value), "")),
+            color = "black", size = 2.88) +  # Make NA boxes white
+  geom_text(label = paste("ICC:", round(icc_result$value, 2)), x = 2, y = 5, size = 2.88) +
+  theme_classic() +
+  labs(x = "Rater") +
+  theme(
+    axis.title.y = element_blank(),
+    panel.grid.major = element_blank(),
+    panel.border = element_blank(),
+    panel.background = element_blank(),
+    axis.ticks = element_blank(),
+    legend.position = "none",
+  ) +
+theme(text = element_text(size = 8, 
+                          family = "Helvetica"),
+      plot.margin = margin(t = 0,  # Top margin
+                             r = 0,  # Right margin
+                             b = 0,  # Bottom margin
+                             l = 0)) # Left margin)
+
+print(w_rating_correlation)
+ggsave(paste0("/Users/jcooper/Desktop/thesis_research/fhb_mineral/FHB_phenotyping_pipeline/manual_field_ratings/results/", t, "_", d, "/", t, "_", d, "rater_corelation.png"), plot = w_rating_correlation, width = 6, height = 4)
+
+# Bind iteration results to data frame with all results outside of loop
+w_results_all <- rbind(w_results_all, w_results_iteration)
+}
+
+paged_table(w_results_all)
+write.csv(w_results_all, "/Users/jcooper/Desktop/thesis_research/fhb_mineral/FHB_phenotyping_pipeline/manual_field_ratings/results/wheat2022_manual_visual_disease_ratings_results.csv", row.names = FALSE)
+
+```
+
+
+
+# Summary statistics for Crk 2022-07-28 and StP 2022-07-13, 18, and 20
+```{r}
+
+# Load data
+mfr <- read.csv("/Users/jcooper/Desktop/thesis_research/fhb_mineral/FHB_phenotyping_pipeline/manual_field_ratings/data/2022/wheat2022_manual_field_rating.csv")
+
+# Pivot long
+mfr_long <- mfr %>% 
+              pivot_longer(cols = c("A", "B", "C", "D", "E"), 
+                           names_to = "Rater_ID", 
+                           values_to = "FHB_SEV")
+
+# Average and SD disease based on mean of ALL 5 RATERS for each date/location combo
+mfr_long %>%
+  mutate(Trial = paste(Location, Rating_Date, sep = " ")) %>% # Make trial ID with location and date
+  group_by(ID) %>% # group by plot
+  na.omit() %>%
+  summarise(plot_FHB = mean(FHB_SEV), Trial = Trial) %>% # calculate plot average FHB 
+  ungroup() %>%
+  group_by(Trial) %>% # Group by trial
+  summarise(mean(plot_FHB),
+            sd(plot_FHB)) # Calculate average FHB and SD at each date/location based on averages from ALL 5 RATERS
+
+# Average and SD disease for each eater in each date/location trial
+mfr_long %>%
+  mutate(Trial = paste(Location, Rating_Date, sep = " ")) %>% # Make trial ID with location and date
+  group_by(ID) %>% # group by plot
+  na.omit() %>%
+  summarise(plot_FHB = mean(FHB_SEV), Trial = Trial, Rater_ID = Rater_ID) %>% # calculate plot average FHB 
+  ungroup() %>%
+  group_by(Trial, Rater_ID) %>% # Group by trial
+  summarise(mean(plot_FHB),
+            sd(plot_FHB)) # Calculate average FHB and SD at each date/location for each rater
+
+```
+
+
+
+# Compare throughput of HTP rover to MFR
+```{r}
+
+# Load rater vs rover time df
+w_time <- read.csv("/Users/jcooper/Desktop/thesis_research/fhb_mineral/FHB_phenotyping_pipeline/manual_field_ratings/data/2022/wheat2022_rater_times.csv")
+
+# Average total rating time per rater
+w_time %>%
+  filter(Rater != "Rover") %>% # not including rover
+  summarise(mean(duration_min)) # Avergae time for one rater
+
+# Average total rating time for all raters
+w_time %>%
+  filter(Rater != "Rover") %>% # not including rover
+  group_by(Rating_date) %>%
+  summarise(trial_time = sum(duration_min)) %>% # Total time for all 5 raters for each day
+  summarise(mean(trial_time)) # Average time for 5 raters to score 80 plots
+
+# Average time per location
+w_time %>%
+  filter(Rater != "Rover") %>% # not including rover
+  group_by(Rating_date) %>%
+  summarise(trial_time = mean(duration_min)) # Average time per rater
+
+# Regress Duration ~ Experience
+# Prepare df
+w_time_annotation <- w_time %>%
+    #filter(Rating_date %in% c("2022-07-28", "2022-07-18")) %>% # Filter trials used for image analysis
+    filter(Rater_ID != "Rover") %>% # Filter trials used for image analysis
+    mutate(Trial = paste(Location, Rating_date, sep = " ")) # Make condensed trial name with location and date
+
+# Fit linear model
+dur_exp <- lm(data = w_time_annotation, duration_min ~ Years_Experience)
+anova(dur_exp)
+summary(dur_exp) # years of experience is not significantly associated with rating duration
+```

@@ -1,0 +1,246 @@
+---
+title: "2021 FHB Pipeline Automatic Image Annotation vs. Manual Field Ratings; Plot"
+author: "Julian Cooper"
+date: "2023-09-27"
+output: html_document
+---
+
+```{r setup, include=FALSE} 
+knitr::opts_chunk$set(warning = FALSE, message = FALSE) 
+```
+
+# Overview
+Correlations between pipeline automatic image annotation (AIA) plot average and manual field rating (MFR) plot averages
+
+# Load Libraries
+```{r,print = FALSE}
+
+library(ggplot2) # For plotting data
+library(tidyverse) # For manipulating/analyzing data
+library(stringr) # For regex
+library(GGally) # For ggcor
+library(irr) # For calculating ICC
+library(ggridges)    # for making ridge plot
+library(viridis)     # color scaling in plot
+library(rmarkdown) # For formatting rmarkdown
+library(reshape2) # For reshaping correlation matrix
+library(ggpubr) # For arranging plots
+
+```
+
+# Compare AIA Plot Averages to MFR Plot Averages Based on ALL 5 RATERS
+Filter for gradable spike images <= 0.50
+```{r}
+
+# Load AIA (automatic image annotation) data
+aia <- read.csv("/Users/jcooper/Desktop/thesis_research/fhb_mineral/FHB_phenotyping_pipeline/automatic_image_annotation/2021model/data_processing/data/wheat2021model_automatic_image_annotation.csv")
+
+# Calculate plot average FHB based on gradable spikes
+aia_plot_avg <- aia %>% 
+  filter(gradability_prob <= 0.50) %>%
+  group_by(ID) %>% # group by ID for plot average
+  summarise(aia_avg_fhb = mean(fhb_percentage, na.rm = TRUE)) %>% # Get plot average
+  ungroup()
+
+# Load MFR (manual field rating) data
+mfr <- read.csv("/Users/jcooper/Desktop/thesis_research/fhb_mineral/FHB_phenotyping_pipeline/manual_field_ratings/data/2022/wheat2022_manual_field_rating.csv")
+
+# Calculate plot average FHB based on ALL 5 RATERS
+mfr_all_rater_plot_avg <- mfr %>%
+  pivot_longer(cols = c("A", "B", "C", "D", "E"), values_to = "fhb_perc", names_to = "Rater_ID") %>% # Pivot long by rater ID
+  group_by(ID) %>% # group by ID for plot average
+  summarise(mfr_avg_fhb = mean(fhb_perc, na.rm = TRUE))  %>% # Get plot average
+  ungroup()
+
+# Merge MFR and AIA 
+aia_mfr <- merge(aia_plot_avg, mfr_all_rater_plot_avg, by = "ID")
+
+# Extract date and location from ID
+aia_mfr$Location <- sub("^(.{3}).*$", "\\1", aia_mfr$ID)
+aia_mfr$Rating_Date <- sub(".*(.{10})$", "\\1", aia_mfr$ID)
+aia_mfr$Location_Date <- paste(aia_mfr$Location, aia_mfr$Rating_Date)
+
+# Plot AIA vs MFR Plot Aggregate Disease Scores
+plot_aia_mfr <- aia_mfr %>%
+ggplot(aes(x = mfr_avg_fhb, y = aia_avg_fhb)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = FALSE, color = "blue") +  # Add linear regression line
+  geom_abline() +
+  labs(x = "Manual Field Rating FHB %", 
+       y = "Automatic Image Analysis FHB %") +
+  xlim(0,100) +
+  ylim(0,100) +
+  theme_classic()
+print(plot_aia_mfr)
+ggsave("/Users/jcooper/Desktop/thesis_research/fhb_mineral/FHB_phenotyping_pipeline/automatic_image_annotation/2021model/aia_mfr_plot/results/2021model_scatterplot_AIA_MFR.png", plot = plot_aia_mfr, width = 6, height = 4)
+
+# Plot AIA vs MFR Plot Aggregate Disease Scores for each Location/Date
+plot_aia_mfr <- aia_mfr %>%
+ggplot(aes(x = mfr_avg_fhb, y = aia_avg_fhb)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = FALSE, color = "blue") +  # Add linear regression line
+  geom_abline() +
+  labs(x = "Manual Field Rating FHB %", 
+       y = "Automatic Image Analysis FHB %") +
+  xlim(0,100) +
+  ylim(0,100) +
+  theme_classic() +
+  facet_grid(~Location_Date)
+print(plot_aia_mfr)
+ggsave("/Users/jcooper/Desktop/thesis_research/fhb_mineral/FHB_phenotyping_pipeline/automatic_image_annotation/2021model/aia_mfr_plot/results/2021model_scatterplot_AIA_MFR_location_date.png", plot = plot_aia_mfr, width = 6, height = 4)
+
+# Correlations for model to plot averages based on all 5 raters
+aia_mfr %>%
+  summarise(cor(aia_avg_fhb, mfr_avg_fhb))
+
+# Correlations for model to plot averages based on all 5 raters for location/dates with corresponding manual image annotations
+aia_mfr %>%
+  filter(Rating_Date %in% c("2022-07-18", "2022-07-28")) %>%
+  summarise(cor(aia_avg_fhb, mfr_avg_fhb))
+
+# Correlations for model to plot averages based on all 5 raters for each location/date
+aia_mfr %>%
+  group_by(Location_Date) %>%
+  summarise(cor(aia_avg_fhb, mfr_avg_fhb))
+```
+
+# Compare AIA Plot Averages to MFR Plot Aggregate Disease from INDIVIDUAL RATERS
+Filter for gradable spike images <= 0.50
+```{r}
+
+# Load AIA (automatic image annotation) data
+aia <- read.csv("/Users/jcooper/Desktop/thesis_research/fhb_mineral/FHB_phenotyping_pipeline/automatic_image_annotation/2021model/data_processing/data/wheat2021model_automatic_image_annotation.csv")
+
+# Calculate plot average FHB based on gradable spikes
+aia_plot_avg <- aia %>% 
+  filter(gradability_prob <= 0.50) %>%
+  group_by(ID) %>% # group by ID for plot average
+  summarise(aia_avg_fhb = mean(fhb_percentage, na.rm = TRUE)) %>% # Get plot average
+  ungroup()
+
+# Load MFR (manual fiel rating) data
+mfr <- read.csv("/Users/jcooper/Desktop/thesis_research/fhb_mineral/FHB_phenotyping_pipeline/manual_field_ratings/data/2022/wheat2022_manual_field_rating.csv")
+
+# Merge MFR and AIA 
+aia_mfr <- merge(aia_plot_avg, mfr, by = "ID")
+
+# Extract date and location from ID
+aia_mfr$Location <- sub("^(.{3}).*$", "\\1", aia_mfr$ID)
+aia_mfr$Rating_Date <- sub(".*(.{10})$", "\\1", aia_mfr$ID)
+aia_mfr$Location_Date <- paste(aia_mfr$Location, aia_mfr$Rating_Date)
+
+# Correlations between pipeline and raters for each location
+paged_table(aia_mfr %>%
+  group_by(Location_Date) %>%
+  na.omit() %>%
+  summarise(aia_A = cor(aia_avg_fhb, A, method = "pearson"),
+            aia_B = cor(aia_avg_fhb, B, method = "pearson"),
+            aia_C = cor(aia_avg_fhb, C, method = "pearson"),
+            aia_D= cor(aia_avg_fhb, D, method = "pearson"),
+            aia_E = cor(aia_avg_fhb, E, method = "pearson")))
+
+# Iterate through each AIA/Rater combo and plot AIA vs. MFR
+for (i in c(13:17)) {
+  plot_aia_mfr <- aia_mfr %>%
+ggplot(aes(x = aia_mfr[,i], y = aia_avg_fhb)) +
+geom_point() +
+geom_smooth(method = "lm", se = FALSE, color = "blue") +  # Add linear regression line
+geom_abline() +
+labs(x = paste("Manual Field Rating FHB %", colnames(aia_mfr)[i]),
+y = "Automatic Image Analysis FHB %") +
+xlim(0,100) +
+ylim(0,100) +
+theme_classic() +
+facet_grid(~Location_Date)
+print(plot_aia_mfr)
+ggsave(paste("/Users/jcooper/Desktop/thesis_research/fhb_mineral/FHB_phenotyping_pipeline/automatic_image_annotation/2021model/aia_mfr_plot/results/individual_raters/2021model_scatterplot_AIA_MFR_",colnames(aia_mfr)[i], ".png") , plot = plot_aia_mfr, width = 6, height = 4)
+
+}
+
+
+```
+# Disease Progression of AIA Plot Averages Comapred to MFR Plot Averages Based on ALL 5 RATERS
+Filter for gradable spike images <= 0.50
+```{r}
+
+# Load AIA (automatic image annotation) data
+aia <- read.csv("/Users/jcooper/Desktop/thesis_research/fhb_mineral/FHB_phenotyping_pipeline/automatic_image_annotation/2021model/data_processing/data/wheat2021model_automatic_image_annotation.csv")
+
+# Calculate plot average FHB based on gradable spikes
+aia_plot_avg <- aia %>% 
+  filter(gradability_prob <= 0.50) %>%
+  group_by(ID) %>% # group by ID for plot average
+  summarise(aia_avg_fhb = mean(fhb_percentage, na.rm = TRUE)) %>% # Get plot average
+  ungroup()
+
+# Load MFR (manual field rating) data
+mfr <- read.csv("/Users/jcooper/Desktop/thesis_research/fhb_mineral/FHB_phenotyping_pipeline/manual_field_ratings/data/2022/wheat2022_manual_field_rating.csv")
+
+# Calculate plot average FHB based on ALL 5 RATERS
+mfr_all_rater_plot_avg <- mfr %>%
+  pivot_longer(cols = c("A", "B", "C", "D", "E"), values_to = "fhb_perc", names_to = "Rater_ID") %>% # Pivot long by rater ID
+  group_by(ID) %>% # group by ID for plot average
+  summarise(mfr_avg_fhb = mean(fhb_perc, na.rm = TRUE))  %>% # Get plot average
+  ungroup()
+
+# Merge MFR and AIA 
+aia_mfr <- merge(aia_plot_avg, mfr_all_rater_plot_avg, by = "ID")
+
+# Extract date and location from ID
+aia_mfr$Location <- sub("^(.{3}).*$", "\\1", aia_mfr$ID)
+aia_mfr$Rating_Date <- sub(".*(.{10})$", "\\1", aia_mfr$ID)
+aia_mfr$Plot <- sub(".*(76\\d{3}).*", "\\1", aia_mfr$ID)
+
+
+# Filter for plots with disease progression data - StP
+aia_mfr_StP <- aia_mfr %>%
+  filter(Location == "StP")
+
+# Add genotype
+geno <- read.csv("/Users/jcooper/Desktop/thesis_research/fhb_mineral/FHB_phenotyping_pipeline/manual_field_ratings/data/raw_data/wheat2022_HTP_plot_geno_key.csv")
+aia_mfr_StP <- merge(aia_mfr_StP, geno, by = "Plot")
+
+# Creating a new data frame with correlations between mfr_avg_fhb and aia_avg_fhb for each Rating_Date
+cor_df <- aia_mfr_StP %>%
+  group_by(Rating_Date) %>%
+  summarise(correlation = cor(mfr_avg_fhb, aia_avg_fhb))
+
+# Heatmap of MFR disease progression
+mfr_heat <- aia_mfr_StP %>%
+  ggplot(aes(x = Rating_Date, y = Plot, fill = mfr_avg_fhb)) +
+  geom_tile() +
+  scale_fill_gradient(low = "blue", high = "red") +
+  labs(x = "Rating Date",
+       y = "",
+       fill = "FHB %"
+       ) +  # Empty y-axis label to remove y-axis labels
+  facet_grid(Geno ~ ., scales = "free_y", space = "free_y", switch = "y") +  # Move facet titles to the left
+  theme(strip.text.y.left = element_text(angle = 0),
+        axis.text.y = element_blank(),
+        axis.ticks.y = element_blank(),
+        legend.position = "left") +
+  scale_x_discrete(expand = c(0, 0))
+print(mfr_heat)
+
+ggsave("/Users/jcooper/Desktop/thesis_research/fhb_mineral/FHB_phenotyping_pipeline/automatic_image_annotation/2021model/aia_mfr_plot/results/mfr_heatmap.png", mfr_heat, width = 6, height = 5)
+
+# Heatmap of AIA disease progression
+aia_heat <- aia_mfr_StP %>%
+  ggplot(aes(x = Rating_Date, y = Plot, fill = aia_avg_fhb)) +
+  geom_tile() +
+  scale_fill_gradient(low = "blue", high = "red") +
+  labs(x = "Rating Date",
+       y = "") +  # Empty y-axis label to remove y-axis labels
+  facet_grid(Geno ~ ., scales = "free_y", space = "free_y", switch = "y") +  # Move facet titles to the left
+  theme(strip.text.y = element_blank(),
+        axis.text.y = element_blank(),
+        axis.ticks.y = element_blank(),
+        strip.background = element_blank(),
+        legend.position = "none") +
+  scale_x_discrete(expand = c(0, 0))
+print(aia_heat)
+
+ggsave("/Users/jcooper/Desktop/thesis_research/fhb_mineral/FHB_phenotyping_pipeline/automatic_image_annotation/2021model/aia_mfr_plot/results/aia_heatmap.png", aia_heat, width = 4.37, height = 5)
+
+
+```
